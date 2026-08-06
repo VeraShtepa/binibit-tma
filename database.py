@@ -19,15 +19,15 @@ def init_db():
     """Создаёт таблицу users, если её ещё нет."""
     conn = get_connection()
     cur = conn.cursor()
-    cur.execute("""
+    cur.execute(f"""
         CREATE TABLE IF NOT EXISTS users (
             user_id INTEGER PRIMARY KEY,
             username TEXT,
             invited_by INTEGER,
-            binibit_ref_link TEXT DEFAULT ?,
+            binibit_ref_link TEXT DEFAULT '{DEFAULT_BINIBIT_REF}',
             created_at TEXT
         )
-    """, (DEFAULT_BINIBIT_REF,))
+    """)
     conn.commit()
     conn.close()
 
