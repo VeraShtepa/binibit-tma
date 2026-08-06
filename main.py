@@ -27,7 +27,7 @@ TEAM_COMMUNITY_CHAT_URL = "https://t.me/+4TNM-P6FdQY4YWI0"
 
 # Имя бота — используется для сборки реферальной ссылки на само мини-приложение.
 # Поменяй на юзернейм своего бота (без @).
-BOT_USERNAME = "YourBotUsername"
+BOT_USERNAME = "Assistentvdele_Bot"
 
 
 class RegisterPayload(BaseModel):
