@@ -1,6 +1,6 @@
 """
-bot.py — Telegram-бот для Binibit Team Mini App.
-Ловит /start и открывает WebApp с реферальным startapp-параметром.
+bot.py — Telegram-бот Binibit Team Mini App.
+Показывает кнопку «Открыть приложение».
 """
 
 import asyncio
@@ -17,23 +17,26 @@ from aiogram.types import (
     MenuButtonWebApp,
 )
 
-# --- Конфиг ---
-BOT_TOKEN = os.getenv("BOT_TOKEN", "ВСТАВЬ_ТОКЕН_ОТ_BOTFATHER")
-WEBAPP_URL = os.getenv("WEBAPP_URL", "https://твой-домен/")
-BOT_USERNAME = "Assistentvdele_Bot"
+# --- Конфиг (берётся из Railway → Variables) ---
+BOT_TOKEN = os.getenv("BOT_TOKEN", "")
+WEBAPP_URL = os.getenv("WEBAPP_URL", "")
+
+if not BOT_TOKEN:
+    raise RuntimeError("Переменная BOT_TOKEN пустая или не найдена на Railway!")
+if not WEBAPP_URL:
+    raise RuntimeError("Переменная WEBAPP_URL пустая или не найдена на Railway!")
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
-log = logging.getLogger("bot")
+log = logging.getLogger("binibit-bot")
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 
 def _webapp_kb(startapp: str | None = None) -> InlineKeyboardMarkup:
-    """Кнопка открытия Mini App. startapp попадает в start_param внутри WebApp."""
     url = f"{WEBAPP_URL}?startapp={startapp}" if startapp else WEBAPP_URL
     return InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="🚀 Открыть приложение", web_app=WebAppInfo(url=url))
@@ -42,22 +45,16 @@ def _webapp_kb(startapp: str | None = None) -> InlineKeyboardMarkup:
 
 @dp.message(CommandStart(deep_link=True))
 async def start_deeplink(message: Message, command: CommandStart):
-    """
-    /start <payload>
-    payload — это user_id пригласившего (его прокидывает main.py в invite_link).
-    """
     payload = command.args or ""
     log.info("Deep-link /start | user_id=%s payload=%s", message.from_user.id, payload)
-
     await message.answer(
-        "Привет! Ты пришёл по приглашению. Жми кнопку ниже 👇",
+        "Привет! Ты пришёл по приглашению. Жми кнопку ниже, чтобы открыть приложение 👇",
         reply_markup=_webapp_kb(payload or None),
     )
 
 
 @dp.message(CommandStart())
 async def start_plain(message: Message):
-    """/start без параметров — пользователь пришёл сам."""
     log.info("Plain /start | user_id=%s", message.from_user.id)
     await message.answer(
         "Привет! Это Binibit Team. Жми кнопку ниже, чтобы открыть приложение 👇",
@@ -75,7 +72,6 @@ async def help_cmd(message: Message):
 
 
 async def on_startup():
-    """Ставим кнопку меню (слева от поля ввода), чтобы Mini App был всегда под рукой."""
     try:
         await bot.set_chat_menu_button(
             menu_button=MenuButtonWebApp(
