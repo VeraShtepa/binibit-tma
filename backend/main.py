@@ -6,6 +6,7 @@ import os
 import re
 import edge_tts
 from telegram import Update
+from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
@@ -157,8 +158,16 @@ async def process_ai_response(user_id, user_name, user_text, update, context, se
             tts = edge_tts.Communicate(clean_text, voice="ru-RU-DmitryNeural")
             await tts.save(audio_path)
             try:
-                with open(audio_path, "rb") as voice_file:
-                    await update.message.reply_voice(voice=voice_file)
+                try:
+                    with open(audio_path, "rb") as voice_file:
+                        await update.message.reply_voice(voice=voice_file)
+                except BadRequest as e:
+                    if "voice_messages_forbidden" in str(e).lower():
+                        # Пользователь запретил в настройках приватности присылать
+                        # ему голосовые — отправляем обычным текстом вместо этого.
+                        await update.message.reply_text(reply_text)
+                    else:
+                        raise
             finally:
                 if os.path.exists(audio_path):
                     os.remove(audio_path)
