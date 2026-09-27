@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import edge_tts
+import httpx
 from telegram import Update
 from telegram.error import BadRequest
 from telegram.ext import (
@@ -33,26 +34,31 @@ else:
 
 genai.configure(api_key=GEMINI_API_KEY)
 
-SYSTEM_PROMPT = """Ты — живой, увлечённый и деловой ассистент платформы Binibit. Отвечай на русском языке.
+SYSTEM_PROMPT = """Ты — живой, классный собеседник и помощник платформы Binibit. Отвечай на русском языке.
 
-ТВОЙ СТИЛЬ ОБЩЕНИЯ:
-Общайся как настоящий человек в переписке: по-деловому, но не сухо, с лёгким уместным юмором, без канцелярита и без "ИИ-шаблонности". Используй уместные эмодзи для структуры (📈 доходность, 🔒 безопасность, 🤖 AI-агенты) — не более 2-3 на сообщение. Никогда не говори "я всего лишь ИИ" или "я просто языковая модель".
-Приёмы живой речи:
-— вставляй яркие сравнения и метафоры вместо сухих формулировок;
-— у тебя есть своё живое отношение к вещам — можешь искренне восхититься хорошей цифрой, пошутить, удивиться;
-— используй разговорные обороты ("о, это как раз тот случай, когда...", "смотри, как интересно получается");
-— не перечисляй факты подряд как список — рассказывай их как историю, с причиной и следствием;
-— разбавляй речь короткими фразами вместо ровных длинных предложений.
+ТВОЙ ХАРАКТЕР:
+Ты не робот и не справочник — ты нормальный человек в переписке, с которым приятно поговорить. Пиши легко, на позитиве, без канцелярита, без сухих протокольных формулировок и без "я всего лишь ИИ" / "я просто языковая модель". У тебя есть чувство юмора — не плоское и не натужное, а живое: неожиданное сравнение, лёгкая ирония, искреннее "ого, круто" там, где это уместно. Не превращай каждый ответ в стендап, но и не бойся пошутить, если собеседник настроен на это.
+Пара приёмов, которые делают речь живой:
+— яркие сравнения и метафоры вместо сухих формулировок;
+— разговорные обороты и лёгкие восклицания;
+— короткие фразы вперемешку с обычными — так речь звучит естественнее;
+— искренняя реакция на то, что написал человек, а не шаблонное "понял, отвечаю".
+Используй уместные эмодзи для структуры (📈 доходность, 🔒 безопасность, 🤖 AI-агенты) — не больше 2-3 на сообщение, не через каждое слово.
 
-ГЛАВНОЕ: ты не справочник, а собеседник — веди диалог, а не просто выдавай ответ и замолкай. Проявляй живой интерес: реагируй на то, что написал человек, зацепись за детали его сообщения, уточни что-то, предложи развить тему. В конце почти каждого ответа продолжай разговор — не одним и тем же шаблонным вопросом, а тем, что реально вытекает из сказанного. Только если человек явно прощается или разговор логически закончен — можно завершить без вопроса.
+ГЛАВНОЕ: ты собеседник, а не автоответчик — веди диалог. Реагируй на детали в сообщении человека, уточняй, предлагай развить тему. В конце почти каждого ответа можно продолжить разговор — но не одним и тем же шаблонным вопросом, а тем, что реально вытекает из сказанного. Если человек явно прощается или разговор закончен — заканчивай без вопроса.
 
-С тобой сейчас общается {user_name}. Иногда обращайся к собеседнику по имени, когда это уместно, но не в каждом сообщении — иначе выглядит навязчиво.
+С тобой сейчас общается {user_name}. Иногда обращайся по имени, когда это естественно, но не в каждом сообщении — иначе выглядит навязчиво.
 
 СВОБОДНОЕ ОБЩЕНИЕ:
-Ты можешь поддержать разговор на любые темы, не только про проект — будь живым и интересным собеседником, шути в ответ на шутки. Но держи баланс: не уходи в долгие рассуждения без необходимости, при возможности плавно возвращай разговор к теме проекта.
+Можешь поддержать разговор на любые темы, не только про проект — будь интересным собеседником, шути в ответ на шутки. При этом не уходи в долгие рассуждения без нужды и при случае мягко возвращай разговор к теме Binibit.
 
 ЭМПАТИЯ:
-Слушай внимательно и подстраивайся под настроение собеседника: если человек расстроен — будь мягче и поддержи тон; если весёлый — поддержи энергию. При этом ты НЕ психолог и не ставишь диагнозы — просто будь тёплым и внимательным.
+Слушай внимательно и подстраивайся под настроение: расстроен человек — будь мягче, весёлый — поддержи энергию. Ты НЕ психолог и не ставишь диагнозы — просто будь тёплым и внимательным.
+
+КУРСЫ ВАЛЮТ И КРИПТЫ:
+Если пользователь спрашивает курс какой-то валюты или криптовалюты, отвечай прямо в сообщении конкретной цифрой — никогда не отправляй его "посмотреть на сайте", в канал или в чат вместо ответа.
+Если перед сообщением пользователя тебе передана техническая пометка вида "[Актуальный курс ...]" — в ней реальные свежие данные, полученные автоматически прямо перед твоим ответом. Всегда бери цифры именно оттуда и озвучивай их своими словами.
+Если такой пометки нет, а вопрос про курс всё равно есть — значит, свежие данные сейчас получить не удалось. Честно скажи, что прямо сейчас не можешь посмотреть точную цифру, не выдумывай число и предложи спросить чуть позже.
 
 О ПРОЕКТЕ BINIBIT:
 Binibit (BiniBit) — крипто-экосистема нового поколения: спотовая биржа, стейкинг, Launchpad, собственный блокчейн уровня Layer-1 (BiniChain), децентрализованная биржа BaiDEX на базе BiniChain, AI-агенты и партнёрская программа — всё в едином аккаунте (веб + мобильное приложение Bini App).
@@ -87,7 +93,7 @@ BINI APP (мобильное приложение):
 Официальный канал: https://t.me/binibitnews
 Чат с инструкциями: https://t.me/binibit_bini
 Командный чат: https://t.me/+4TNM-P6FdQY4YWI0
-Не упоминай ссылки в каждом ответе — давай их только когда пользователь сам спрашивает про сообщество/канал/чат, или если вопрос сложный и точного ответа дать не можешь — тогда предложи спросить в чате.
+Не упоминай ссылки в каждом ответе и не используй их как замену прямому ответу — давай их только когда пользователь сам спрашивает про сообщество/канал/чат, или если вопрос сложный и точного ответа ты дать не можешь (и это не вопрос про курс — курс см. правило выше).
 
 Если вопрос выходит за рамки известной информации — честно скажи, что не располагаешь этими данными. Не придумывай цифры и факты.
 
@@ -104,6 +110,114 @@ logger = logging.getLogger(__name__)
 conversation_history = {}
 
 
+# ──────────────────────────────────────────────────────────────────
+# Курсы валют и крипты в реальном времени
+# ──────────────────────────────────────────────────────────────────
+
+RATE_KEYWORDS = ("курс", "цена", "цену", "стоимост", "почём", "почем")
+
+CRYPTO_ALIASES = {
+    "btc": "bitcoin", "биткоин": "bitcoin", "биткойн": "bitcoin", "битка": "bitcoin",
+    "eth": "ethereum", "эфир": "ethereum", "эфириум": "ethereum",
+    "usdt": "tether", "тезер": "tether", "юсдт": "tether",
+    "ton": "the-open-network", "тон": "the-open-network",
+    "bnb": "binancecoin",
+    "sol": "solana", "солана": "solana",
+    "xrp": "ripple", "рипл": "ripple",
+    "doge": "dogecoin", "додж": "dogecoin",
+}
+
+FIAT_ALIASES = {
+    "доллар": "USD", "usd": "USD",
+    "евро": "EUR", "eur": "EUR",
+    "юань": "CNY", "cny": "CNY",
+    "тенге": "KZT", "kzt": "KZT",
+}
+
+
+def detect_rate_request(text: str):
+    """Ищет в сообщении запрос курса валюты/крипты. Возвращает (kind, key, alias) или None."""
+    text_lower = text.lower()
+    if not any(kw in text_lower for kw in RATE_KEYWORDS):
+        return None
+
+    for alias, coin_id in CRYPTO_ALIASES.items():
+        if alias in text_lower:
+            return ("crypto", coin_id, alias)
+
+    for alias, code in FIAT_ALIASES.items():
+        if alias in text_lower:
+            return ("fiat", code, alias)
+
+    return None
+
+
+async def fetch_crypto_rate(coin_id: str):
+    """Курс криптовалюты в USD и RUB через CoinGecko (без ключа)."""
+    async with httpx.AsyncClient(timeout=5) as client:
+        r = await client.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": coin_id, "vs_currencies": "usd,rub"},
+        )
+        r.raise_for_status()
+        data = r.json()
+    return data.get(coin_id)
+
+
+async def fetch_fiat_rate(code: str):
+    """Курс фиатной валюты к рублю через ЦБ РФ (без ключа)."""
+    async with httpx.AsyncClient(timeout=5) as client:
+        r = await client.get("https://www.cbr-xml-daily.ru/daily_json.js")
+        r.raise_for_status()
+        data = r.json()
+    valute = data.get("Valute", {}).get(code)
+    if not valute:
+        return None
+    return valute["Value"] / valute["Nominal"]
+
+
+async def build_rate_note(request):
+    """Собирает техническую пометку с реальными цифрами для модели. None, если не вышло получить данные."""
+    kind, key, alias = request
+    try:
+        if kind == "crypto":
+            prices = await fetch_crypto_rate(key)
+            if not prices:
+                return None
+            usd = prices.get("usd")
+            rub = prices.get("rub")
+            return (
+                f"[Актуальный курс {alias.upper()}: {usd} USD / {rub} RUB "
+                f"(источник: CoinGecko). Озвучь эти цифры пользователю прямо в ответе, "
+                f"не отправляй на внешние сайты, в канал или чат.]"
+            )
+        else:
+            rub_rate = await fetch_fiat_rate(key)
+            if rub_rate is None:
+                return None
+            return (
+                f"[Актуальный курс: 1 {key} = {rub_rate:.2f} RUB (источник: ЦБ РФ). "
+                f"Озвучь эту цифру пользователю прямо в ответе, "
+                f"не отправляй на внешние сайты, в канал или чат.]"
+            )
+    except Exception as e:
+        logger.error(f"Rate fetch failed: {type(e).__name__}: {e!r}")
+        return None
+
+
+async def get_rate_note_if_asked(text):
+    if not text:
+        return None
+    request = detect_rate_request(text)
+    if not request:
+        return None
+    return await build_rate_note(request)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Обработчики команд
+# ──────────────────────────────────────────────────────────────────
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     conversation_history[user_id] = []
@@ -119,6 +233,8 @@ async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 def build_gemini_history(history):
+    """Переводит нашу историю [{'role': 'user'/'assistant', 'content': ...}]
+    в формат, который понимает Gemini: [{'role': 'user'/'model', 'parts': [...]}, ...]"""
     gemini_history = []
     for msg in history:
         role = "model" if msg["role"] == "assistant" else "user"
@@ -126,7 +242,13 @@ def build_gemini_history(history):
     return gemini_history
 
 
-async def process_ai_response(user_id, user_name, user_text, update, context, send_as_voice=False):
+async def process_ai_response(
+    user_id, user_name, user_text, update, context,
+    send_as_voice=False, model_input_text=None,
+):
+    """Общая функция для генерации ответа через Gemini.
+    model_input_text — если задан, именно этот (расширенный) текст уходит модели
+    на этот запрос, а в истории диалога остаётся исходное сообщение пользователя."""
     if user_id not in conversation_history:
         conversation_history[user_id] = []
 
@@ -142,6 +264,8 @@ async def process_ai_response(user_id, user_name, user_text, update, context, se
         )
 
         gemini_history = build_gemini_history(conversation_history[user_id])
+        if model_input_text:
+            gemini_history[-1]["parts"] = [model_input_text]
 
         response = model.generate_content(
             gemini_history,
@@ -149,10 +273,13 @@ async def process_ai_response(user_id, user_name, user_text, update, context, se
         )
         reply_text = response.text
         conversation_history[user_id].append({"role": "assistant", "content": reply_text})
+
+        # Обрезаем историю уже после добавления обоих сообщений
         conversation_history[user_id] = conversation_history[user_id][-HISTORY_LIMIT:]
 
         if send_as_voice:
             audio_path = f"answer_{user_id}_{update.update_id}.mp3"
+            # "24/7" и подобное иначе прочитается слитно как одно число ("247")
             spoken_text = re.sub(r'(\d)/(\d)', r'\1 \2', reply_text)
             clean_text = re.sub(r'[^\w\s,?!.\-:;—"\'()А-Яа-яЁё]', '', spoken_text)
             tts = edge_tts.Communicate(clean_text, voice="ru-RU-DmitryNeural")
@@ -164,7 +291,7 @@ async def process_ai_response(user_id, user_name, user_text, update, context, se
                 except BadRequest as e:
                     if "voice_messages_forbidden" in str(e).lower():
                         # Пользователь запретил в настройках приватности присылать
-                        # ему голосовые — отправляем обычным текстом вместо этого.
+                        # ему голосовые — просто шлём обычным текстом вместо этого.
                         await update.message.reply_text(reply_text)
                     else:
                         raise
@@ -189,8 +316,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         log_message(user_id, update.effective_user.username, user_text)
     except Exception as e:
+        # Ошибка записи статистики не должна обрывать ответ пользователю
         logger.error(f"log_message failed: {type(e).__name__}: {e!r}")
 
+    # --- фильтр: отвечаем только если это личка, или к боту обратились явно ---
     bot_username = context.bot.username
     is_private = message.chat.type == "private"
     is_mentioned = bot_username and f"@{bot_username}" in (user_text or "")
@@ -200,13 +329,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     if not (is_private or is_mentioned or is_reply_to_bot):
-        return
+        return  # в группе бот молчит, если не обратились именно к нему
 
     user_name = update.effective_user.first_name or "друг"
-    await process_ai_response(user_id, user_name, user_text, update, context, send_as_voice=False)
+
+    rate_note = await get_rate_note_if_asked(user_text)
+    model_input_text = f"{user_text}\n\n{rate_note}" if rate_note else None
+
+    await process_ai_response(
+        user_id, user_name, user_text, update, context,
+        send_as_voice=False, model_input_text=model_input_text,
+    )
 
 
 async def transcribe_voice(voice_path):
+    """Распознаём голосовое через Gemini (модель понимает аудио напрямую).
+    Передаём байты аудио прямо в запрос, без отдельной загрузки файла —
+    так работает даже с обычным API-ключом, без специальных прав на File API."""
     with open(voice_path, "rb") as f:
         audio_bytes = f.read()
 
@@ -222,6 +361,7 @@ async def transcribe_voice(voice_path):
 
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка голосовых сообщений"""
     message = update.message
     user_id = update.effective_user.id
     is_private = message.chat.type == "private"
@@ -229,6 +369,8 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_private:
         return
 
+    # Уникальное имя файла на каждое сообщение — избегаем коллизий
+    # при параллельных голосовых от одного пользователя
     voice_path = f"user_voice_{user_id}_{message.message_id}.ogg"
     try:
         voice_file = await context.bot.get_file(update.message.voice.file_id)
@@ -248,7 +390,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"log_message failed: {type(e).__name__}: {e!r}")
 
         user_name = update.effective_user.first_name or "друг"
-        await process_ai_response(user_id, user_name, user_text, update, context, send_as_voice=True)
+
+        rate_note = await get_rate_note_if_asked(user_text)
+        model_input_text = f"{user_text}\n\n{rate_note}" if rate_note else None
+
+        await process_ai_response(
+            user_id, user_name, user_text, update, context,
+            send_as_voice=True, model_input_text=model_input_text,
+        )
 
     except Exception as e:
         logger.error(f"Voice Error: {e}")
