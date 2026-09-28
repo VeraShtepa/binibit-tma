@@ -1,5 +1,6 @@
 """
 Telegram bot with AI via Google Gemini — Binibit.
++ Режим черновиков объявлений/постов (только для владельца).
 """
 import logging
 import os
@@ -23,6 +24,10 @@ from stats import init_db, log_message, get_stats, stats_command
 # В коде их быть не должно.
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+
+# Telegram ID владельца — только ему доступен режим черновиков.
+# Можно переопределить переменной OWNER_ID на Railway.
+OWNER_ID = int(os.environ.get("OWNER_ID", "919675687"))
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Переменная TELEGRAM_TOKEN пустая или не найдена на Railway!")
@@ -101,6 +106,37 @@ BINI APP (мобильное приложение):
 1. Отвечай максимально кратко — не больше 2-3 коротких предложений.
 2. Не пиши длинные тексты. Дели информацию на маленькие части.
 """
+
+# ──────────────────────────────────────────────────────────────────
+# Режим черновиков (только для владельца)
+# ──────────────────────────────────────────────────────────────────
+
+# Сюда можно вставить 1-2 коротких своих поста как образец стиля
+# (между тройными кавычками). Пока пусто — бот опирается на правила ниже.
+STYLE_SAMPLES = """"""
+
+DRAFT_MODE_PROMPT = """
+
+=== РЕЖИМ ЧЕРНОВИКОВ (ВАЖНО: перекрывает правила оформления выше) ===
+Сейчас с тобой общается владелец канала. Он просит подготовить объявление, акцию или пост для канала. Правило про 2-3 предложения здесь НЕ действует: пиши полноценный готовый черновик нужной длины.
+
+СТИЛЬ:
+- от первого лица, спокойно, как делятся личным опытом, без хайпа и «золотых гор»
+- короткие абзацы, эмодзи умеренно (✔️ 🚀), без крика и капса
+- в аналитических постах: вопрос-подводка, затем список возможностей с ✔️, затем оговорка «запуск не гарантирует успех, результат зависит от...»
+- всегда честно называй риски: «у любого инструмента есть особенности и риски, решение каждый принимает сам»
+- заверши мягким призывом: «если интересно разобраться, пишите мне в личные сообщения, покажу и отвечу на вопросы, без давления»
+- не используй фразы «быстрые деньги», «гарантированный доход», «уверенная прибыль»
+
+ПРАВИЛА:
+- Условия акции (проценты, суммы, сроки, даты) бери ТОЛЬКО из слов владельца. Если их нет, задай один уточняющий вопрос и ничего не придумывай.
+- Цифры доходности из описания проекта выше (проценты стейкинга, APR, ранги) НЕ вставляй в пост, если владелец сам не назвал их в запросе.
+- Личный опыт («я проверила вывод», «мне начисляется») пиши только если владелец сам это подтвердил в запросе.
+- Не сравнивай с банковскими вкладами, если владелец сам об этом не просил.
+- В самом конце черновика отдельной строкой напиши: «Черновик для проверки».
+- Если владелец просит поправить («короче», «мягче», «добавь про...») — выдай исправленную версию целиком.
+"""
+
 MODEL = "gemini-flash-lite-latest"
 HISTORY_LIMIT = 10
 
@@ -108,6 +144,18 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 conversation_history = {}
+
+# Владельцы (по факту один), у которых сейчас включён режим черновиков
+draft_active = set()
+
+DRAFT_TRIGGER = re.compile(
+    r"(объявлен|черновик|анонс|акци[яюие]\b|напиши пост|сделай пост|пост для канала|пост в канал)",
+    re.IGNORECASE,
+)
+
+
+def is_draft_request(text: str) -> bool:
+    return bool(text and DRAFT_TRIGGER.search(text))
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -221,6 +269,7 @@ async def get_rate_note_if_asked(text):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     conversation_history[user_id] = []
+    draft_active.discard(user_id)
     await update.message.reply_text(
         "Привет! 👋 Я AI-помощник платформы Binibit. Задайте мне вопрос текстом или голосом."
     )
@@ -229,7 +278,29 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     conversation_history[user_id] = []
+    draft_active.discard(user_id)
     await update.message.reply_text("История разговора очищена.")
+
+
+async def post_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/post — включить режим черновиков (только владелец, только в личке)."""
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID or update.message.chat.type != "private":
+        return  # для всех остальных команды как будто нет
+    draft_active.add(user_id)
+    await update.message.reply_text(
+        "Режим черновиков включён ✍️ Пришли задачу и условия (что за акция, сроки, суммы). "
+        "Чтобы вернуться к обычному общению — /chat."
+    )
+
+
+async def chat_mode(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/chat — выключить режим черновиков."""
+    user_id = update.effective_user.id
+    if user_id != OWNER_ID or update.message.chat.type != "private":
+        return
+    draft_active.discard(user_id)
+    await update.message.reply_text("Обычный режим включён 💬")
 
 
 def build_gemini_history(history):
@@ -242,25 +313,42 @@ def build_gemini_history(history):
     return gemini_history
 
 
+def is_owner_private(update: Update) -> bool:
+    return (
+        update.effective_user.id == OWNER_ID
+        and update.message.chat.type == "private"
+    )
+
+
 async def process_ai_response(
     user_id, user_name, user_text, update, context,
-    send_as_voice=False, model_input_text=None,
+    send_as_voice=False, model_input_text=None, draft_mode=False,
 ):
     """Общая функция для генерации ответа через Gemini.
     model_input_text — если задан, именно этот (расширенный) текст уходит модели
-    на этот запрос, а в истории диалога остаётся исходное сообщение пользователя."""
+    на этот запрос, а в истории диалога остаётся исходное сообщение пользователя.
+    draft_mode — режим черновиков (только для владельца): длинный ответ, текстом."""
     if user_id not in conversation_history:
         conversation_history[user_id] = []
 
     conversation_history[user_id].append({"role": "user", "content": user_text})
 
     try:
+        if draft_mode:
+            send_as_voice = False  # черновик всегда текстом, чтобы можно было скопировать
+
         action = "record_voice" if send_as_voice else "typing"
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=action)
 
+        system_text = SYSTEM_PROMPT.format(user_name=user_name)
+        if draft_mode:
+            system_text += DRAFT_MODE_PROMPT
+            if STYLE_SAMPLES.strip():
+                system_text += "\nОБРАЗЦЫ СТИЛЯ:\n" + STYLE_SAMPLES
+
         model = genai.GenerativeModel(
             model_name=MODEL,
-            system_instruction=SYSTEM_PROMPT.format(user_name=user_name),
+            system_instruction=system_text,
         )
 
         gemini_history = build_gemini_history(conversation_history[user_id])
@@ -269,7 +357,9 @@ async def process_ai_response(
 
         response = model.generate_content(
             gemini_history,
-            generation_config=genai.types.GenerationConfig(max_output_tokens=800),
+            generation_config=genai.types.GenerationConfig(
+                max_output_tokens=2000 if draft_mode else 800
+            ),
         )
         reply_text = response.text
         conversation_history[user_id].append({"role": "assistant", "content": reply_text})
@@ -333,12 +423,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_name = update.effective_user.first_name or "друг"
 
+    # --- режим черновиков: только владелец и только в личке ---
+    draft_mode = False
+    if is_owner_private(update):
+        if is_draft_request(user_text):
+            draft_active.add(user_id)
+        draft_mode = user_id in draft_active
+
     rate_note = await get_rate_note_if_asked(user_text)
     model_input_text = f"{user_text}\n\n{rate_note}" if rate_note else None
 
     await process_ai_response(
         user_id, user_name, user_text, update, context,
         send_as_voice=False, model_input_text=model_input_text,
+        draft_mode=draft_mode,
     )
 
 
@@ -391,12 +489,20 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         user_name = update.effective_user.first_name or "друг"
 
+        # --- режим черновиков и для голосовых владельца ---
+        draft_mode = False
+        if is_owner_private(update):
+            if is_draft_request(user_text):
+                draft_active.add(user_id)
+            draft_mode = user_id in draft_active
+
         rate_note = await get_rate_note_if_asked(user_text)
         model_input_text = f"{user_text}\n\n{rate_note}" if rate_note else None
 
         await process_ai_response(
             user_id, user_name, user_text, update, context,
             send_as_voice=True, model_input_text=model_input_text,
+            draft_mode=draft_mode,
         )
 
     except Exception as e:
@@ -412,6 +518,8 @@ def main():
     init_db()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(CommandHandler("post", post_mode))
+    app.add_handler(CommandHandler("chat", chat_mode))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
