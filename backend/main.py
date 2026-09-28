@@ -2,15 +2,18 @@
 Telegram bot with AI via Google Gemini — Binibit.
 + Режим черновиков объявлений/постов (только для владельца).
 """
+import json
 import logging
 import os
 import re
+import time
 import edge_tts
 import httpx
 from telegram import Update
 from telegram.error import BadRequest
 from telegram.ext import (
     ApplicationBuilder,
+    ChatMemberHandler,
     ContextTypes,
     MessageHandler,
     CommandHandler,
@@ -260,6 +263,85 @@ async def get_rate_note_if_asked(text):
     if not request:
         return None
     return await build_rate_note(request)
+
+
+# ──────────────────────────────────────────────────────────────────
+# Реестр чатов: в каких чатах и каналах состоит бот
+# ──────────────────────────────────────────────────────────────────
+
+CHATS_FILE = "known_chats.json"
+known_chats = {}
+
+
+def load_chats():
+    global known_chats
+    try:
+        with open(CHATS_FILE, "r", encoding="utf-8") as f:
+            known_chats = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        known_chats = {}
+
+
+def save_chats():
+    try:
+        with open(CHATS_FILE, "w", encoding="utf-8") as f:
+            json.dump(known_chats, f, ensure_ascii=False)
+    except Exception as e:
+        logger.error(f"save_chats failed: {type(e).__name__}: {e!r}")
+
+
+def remember_chat(chat, is_admin=None):
+    key = str(chat.id)
+    old = known_chats.get(key, {})
+    known_chats[key] = {
+        "title": chat.title or old.get("title") or "(без названия)",
+        "type": chat.type,
+        "admin": old.get("admin") if is_admin is None else is_admin,
+        "seen": int(time.time()),
+    }
+
+
+async def track_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Тихо запоминает любой групповой чат или канал, где бот увидел сообщение."""
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup", "channel"):
+        is_new = str(chat.id) not in known_chats
+        remember_chat(chat)
+        if is_new:
+            save_chats()
+
+
+async def track_membership(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Ловит момент, когда бота добавили, сделали админом или убрали из чата."""
+    event = update.my_chat_member
+    if not event or event.chat.type not in ("group", "supergroup", "channel"):
+        return
+    status = event.new_chat_member.status
+    if status in ("left", "kicked"):
+        known_chats.pop(str(event.chat.id), None)
+    else:
+        remember_chat(event.chat, is_admin=(status == "administrator"))
+    save_chats()
+
+
+async def chats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/chats — список чатов бота (только владелец, только в личке)."""
+    if update.effective_user.id != OWNER_ID or update.message.chat.type != "private":
+        return
+    if not known_chats:
+        await update.message.reply_text(
+            "Пока не вижу ни одного чата. Список наполняется, когда в чате появляется сообщение "
+            "или бота добавляют/делают админом."
+        )
+        return
+    type_names = {"group": "группа", "supergroup": "чат", "channel": "канал"}
+    lines = []
+    for info in sorted(known_chats.values(), key=lambda i: i["title"].lower()):
+        role = "админ" if info.get("admin") else "не админ" if info.get("admin") is False else "?"
+        lines.append(f"• {info['title']} — {type_names.get(info['type'], info['type'])}, {role}")
+    text = f"Чатов и каналов: {len(lines)}\n\n" + "\n".join(lines)
+    for i in range(0, len(text), 4000):
+        await update.message.reply_text(text[i:i + 4000])
 
 
 # ──────────────────────────────────────────────────────────────────
@@ -516,11 +598,17 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     init_db()
+    load_chats()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("reset", reset))
     app.add_handler(CommandHandler("post", post_mode))
     app.add_handler(CommandHandler("chat", chat_mode))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("chats", chats_command))
+    # Реестр чатов работает в отдельной группе (-1) и не мешает обычным ответам
+    app.add_handler(MessageHandler(filters.ChatType.GROUPS, track_chat), group=-1)
+    app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POSTS, track_chat), group=-1)
+    app.add_handler(ChatMemberHandler(track_membership, ChatMemberHandler.MY_CHAT_MEMBER))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     print("Bot started. Press Ctrl+C to stop.")
