@@ -185,12 +185,21 @@ FIAT_ALIASES = {
     "тенге": "KZT", "kzt": "KZT",
 }
 
+# BINI не торгуется как обычная монета на CoinGecko по id — берём курс
+# по адресу контракта токена в сети Ethereum.
+BINI_ALIASES = ("bini", "бини", "бинибит", "binibit")
+BINI_CONTRACT = "0x445d03f499f1c150615957bb87588fb465fc91cc"
+
 
 def detect_rate_request(text: str):
     """Ищет в сообщении запрос курса валюты/крипты. Возвращает (kind, key, alias) или None."""
     text_lower = text.lower()
     if not any(kw in text_lower for kw in RATE_KEYWORDS):
         return None
+
+    for alias in BINI_ALIASES:
+        if alias in text_lower:
+            return ("bini", "bini", alias)
 
     for alias, coin_id in CRYPTO_ALIASES.items():
         if alias in text_lower:
@@ -215,6 +224,18 @@ async def fetch_crypto_rate(coin_id: str):
     return data.get(coin_id)
 
 
+async def fetch_bini_rate():
+    """Курс токена BINI (Binibit) в USD через CoinGecko по адресу контракта в Ethereum."""
+    async with httpx.AsyncClient(timeout=5) as client:
+        r = await client.get(
+            f"https://api.coingecko.com/api/v3/simple/token_price/ethereum",
+            params={"contract_addresses": BINI_CONTRACT, "vs_currencies": "usd,rub"},
+        )
+        r.raise_for_status()
+        data = r.json()
+    return data.get(BINI_CONTRACT.lower())
+
+
 async def fetch_fiat_rate(code: str):
     """Курс фиатной валюты к рублю через ЦБ РФ (без ключа)."""
     async with httpx.AsyncClient(timeout=5) as client:
@@ -231,7 +252,19 @@ async def build_rate_note(request):
     """Собирает техническую пометку с реальными цифрами для модели. None, если не вышло получить данные."""
     kind, key, alias = request
     try:
-        if kind == "crypto":
+        if kind == "bini":
+            prices = await fetch_bini_rate()
+            if not prices:
+                return None
+            usd = prices.get("usd")
+            rub = prices.get("rub")
+            return (
+                f"[Актуальный курс BINI: {usd} USD / {rub} RUB "
+                f"(источник: CoinGecko, курс токена по адресу контракта). "
+                f"Озвучь эти цифры пользователю прямо в ответе, "
+                f"не отправляй на внешние сайты, в канал или чат.]"
+            )
+        elif kind == "crypto":
             prices = await fetch_crypto_rate(key)
             if not prices:
                 return None
