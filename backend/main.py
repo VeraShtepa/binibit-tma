@@ -642,20 +642,4 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             draft_mode=draft_mode,
         )
     except Exception as e:
-        logger.error(f"Voice Error: {e}")
-        await update.message.reply_text("Не удалось распознать голосовое сообщение.")
-    finally:
-        if os.path.exists(voice_path):
-            os.remove(voice_path)
-
-async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    if not message.photo:
-        return
-    user_id = update.effective_user.id
-    is_private = message.chat.type == "private"
-    if not is_private:
-        return
-
-    if is_rate_limited(user_id):
-        await message.reply_text("Секунду, слишком много запросов 🙂 Подож
+        logger.error(f"Voice Error: {e
