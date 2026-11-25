@@ -31,7 +31,7 @@ from digest import digest_scheduler, digest_command
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-OWNER_ID = int(os.environ.get("OWNER_ID", "919675687"))
+OWNER_ID = int(os.environ.get("OWNER_ID", "919675687")
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Переменная TELEGRAM_TOKEN пустая или не найдена на Railway!")
