@@ -31,7 +31,7 @@ from digest import digest_scheduler, digest_command
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-OWNER_ID = int(os.environ.get("OWNER_ID", "919675687")
+OWNER_ID = int(os.environ.get("OWNER_ID", "919675687"))
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Переменная TELEGRAM_TOKEN пустая или не найдена на Railway!")
@@ -642,4 +642,20 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             draft_mode=draft_mode,
         )
     except Exception as e:
-        logger.error(f"Voice Error: {e
+        logger.error(f"Voice Error: {e}")
+        await update.message.reply_text("Не удалось распознать голосовое сообщение.")
+    finally:
+        if os.path.exists(voice_path):
+            os.remove(voice_path)
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message.photo:
+        return
+    user_id = update.effective_user.id
+    is_private = message.chat.type == "private"
+    if not is_private:
+        return
+
+    if is_rate_limited(user_id):
+        await message.reply_text("Секунду, слишком много запросов 🙂 Подож
