@@ -1,15 +1,11 @@
 """
 Telegram bot with AI via Google Gemini — Binibit.
-+ Режим черновиков объявлений/постов (только для владельца).
-+ Расширенная база знаний, быстрые кнопки, антифлуд, чтение скриншотов.
-+ Лиды и еженедельный дайджест.
 """
 import json
 import logging
 import os
 import re
 import time
-import base64
 import edge_tts
 import httpx
 from collections import defaultdict
@@ -39,7 +35,6 @@ OWNER_ID = int(os.environ.get("OWNER_ID", "919675687"))
 
 if not TELEGRAM_TOKEN:
     raise RuntimeError("Переменная TELEGRAM_TOKEN пустая или не найдена на Railway!")
-
 if not GEMINI_API_KEY:
     print("⚠️ ВНИМАНИЕ: переменная GEMINI_API_KEY пустая или не найдена на Railway!")
 else:
@@ -584,4 +579,83 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         draft_mode = user_id in draft_active
 
     rate_note = await get_rate_note_if_asked(user_text)
-    model_input_text = f"{user_text}\n\n{
+    model_input_text = f"{user_text}\n\n{rate_note}" if rate_note else None
+
+    await process_ai_response(
+        user_id, user_name, user_text, update, context,
+        send_as_voice=False, model_input_text=model_input_text,
+        draft_mode=draft_mode,
+    )
+
+async def transcribe_voice(voice_path):
+    with open(voice_path, "rb") as f:
+        audio_bytes = f.read()
+    model = genai.GenerativeModel(model_name=MODEL)
+    response = model.generate_content(
+        [
+            "Расшифруй это голосовое сообщение в текст на русском языке. "
+            "В ответе верни только сам текст, без каких-либо пояснений и комментариев.",
+            {"mime_type": "audio/ogg", "data": audio_bytes},
+        ]
+    )
+    return response.text.strip()
+
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    user_id = update.effective_user.id
+    is_private = message.chat.type == "private"
+    if not is_private:
+        return
+
+    voice_path = f"user_voice_{user_id}_{message.message_id}.ogg"
+    try:
+        voice_file = await context.bot.get_file(update.message.voice.file_id)
+        await voice_file.download_to_drive(voice_path)
+        user_text = await transcribe_voice(voice_path)
+        if not user_text or not user_text.strip():
+            await update.message.reply_text("Не удалось разобрать голосовое сообщение — попробуйте сказать чуть чётче и громче.")
+            return
+
+        try:
+            log_message(user_id, update.effective_user.username, f"[Голосовое]: {user_text}")
+        except Exception as e:
+            logger.error(f"log_message failed: {type(e).__name__}: {e!r}")
+
+        try:
+            log_lead(user_id, update.effective_user.username, update.effective_user.first_name, user_text)
+        except Exception as e:
+            logger.error(f"log_lead (voice) failed: {type(e).__name__}: {e!r}")
+
+        user_name = update.effective_user.first_name or "друг"
+        draft_mode = False
+        if is_owner_private(update):
+            if is_draft_request(user_text):
+                draft_active.add(user_id)
+            draft_mode = user_id in draft_active
+
+        rate_note = await get_rate_note_if_asked(user_text)
+        model_input_text = f"{user_text}\n\n{rate_note}" if rate_note else None
+
+        await process_ai_response(
+            user_id, user_name, user_text, update, context,
+            send_as_voice=True, model_input_text=model_input_text,
+            draft_mode=draft_mode,
+        )
+    except Exception as e:
+        logger.error(f"Voice Error: {e}")
+        await update.message.reply_text("Не удалось распознать голосовое сообщение.")
+    finally:
+        if os.path.exists(voice_path):
+            os.remove(voice_path)
+
+async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not message.photo:
+        return
+    user_id = update.effective_user.id
+    is_private = message.chat.type == "private"
+    if not is_private:
+        return
+
+    if is_rate_limited(user_id):
+        await message.reply_text("Секунду, слишком много запросов 🙂 Подож
